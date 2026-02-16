@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Baby World v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #0a0a0f;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+  }
+  #face {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 180px; height: 180px;
+    pointer-events: none;
+    z-index: 10;
+    animation: breathe 4s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { transform: translate(-50%, -50%) scale(1); }
+    50% { transform: translate(-50%, -50%) scale(1.05); }
+  }
+  .eye-lid {
+    transform-origin: center;
+    animation: blink 4s ease-in-out infinite;
+  }
+  .eye-lid-right {
+    animation-delay: 0.1s;
+  }
+  @keyframes blink {
+    0%, 90%, 100% { transform: scaleY(1); }
+    95% { transform: scaleY(0.05); }
+  }
+</style>
+</head>
+<body>
+
+<svg id="face" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="100" cy="100" r="90" fill="#fff" stroke="#e0e0e0" stroke-width="2"/>
+  <g class="eye-lid">
+    <ellipse cx="70" cy="82" rx="16" ry="18" fill="#1a1a2e"/>
+    <ellipse cx="74" cy="78" rx="6" ry="7" fill="#fff"/>
+  </g>
+  <g class="eye-lid eye-lid-right">
+    <ellipse cx="130" cy="82" rx="16" ry="18" fill="#1a1a2e"/>
+    <ellipse cx="134" cy="78" rx="6" ry="7" fill="#fff"/>
+  </g>
+  <ellipse cx="50" cy="110" rx="18" ry="12" fill="#ffb3b3" opacity="0.5"/>
+  <ellipse cx="150" cy="110" rx="18" ry="12" fill="#ffb3b3" opacity="0.5"/>
+  <path d="M 70 120 Q 100 150 130 120" stroke="#1a1a2e" stroke-width="4" fill="none" stroke-linecap="round"/>
+</svg>
+
+<canvas id="canvas"></canvas>
+
+<script>
+(function() {
+  'use strict';
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // --- Resize ---
+  function resize() {
+    canvas.width = window.innerWidth * devicePixelRatio;
+    canvas.height = window.innerHeight * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const W = () => window.innerWidth;
+  const H = () => window.innerHeight;
+
+  // ==============================================
+  // IMPROVEMENT 2: Color Evolution Over Time
+  // ==============================================
+  // Color palettes that the scene transitions through
+  const colorPhases = [
+    // Phase 0: Black & white (newborn optimal)
+    ['#ffffff', '#e0e0e0', '#c0c0c0', '#d0d0d0', '#f5f5f5'],
+    // Phase 1: Introduce red
+    ['#ffffff', '#e0e0e0', '#ff4444', '#ff6b6b', '#ffaaaa'],
+    // Phase 2: Introduce blue
+    ['#ffffff', '#ff4444', '#4488ff', '#66aaff', '#aaccff'],
+    // Phase 3: Warm tones
+    ['#ff4444', '#ff6b6b', '#ffdd44', '#ffee77', '#ffaa33'],
+    // Phase 4: Cool tones
+    ['#4488ff', '#66aaff', '#44dd88', '#77eebb', '#88ddff'],
+    // Phase 5: Full rainbow
+    ['#ff4444', '#ffdd44', '#44dd88', '#4488ff', '#cc66ff'],
+  ];
+
+  const PHASE_DURATION = 45000; // 45 seconds per phase
+  let colorPhaseStart = performance.now();
+
+  function lerpColor(a, b, t) {
+    const ah = parseInt(a.slice(1), 16);
+    const bh = parseInt(b.slice(1), 16);
+    const ar = (ah >> 16) & 0xff, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
+    const br = (bh >> 16) & 0xff, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+    const rr = Math.round(ar + (br - ar) * t);
+    const rg = Math.round(ag + (bg - ag) * t);
+    const rb = Math.round(ab + (bb - ab) * t);
+    return `rgb(${rr},${rg},${rb})`;
+  }
+
+  function getCurrentPalette(time) {
+    const elapsed = time - colorPhaseStart;
+    const totalCycle = PHASE_DURATION * colorPhases.length;
+    const cycleTime = elapsed % totalCycle;
+    const phaseIndex = Math.floor(cycleTime / PHASE_DURATION);
+    const nextPhaseIndex = (phaseIndex + 1) % colorPhases.length;
+    const phaseProgress = (cycleTime % PHASE_DURATION) / PHASE_DURATION;
+
+    // Smooth transition in the last 20% of each phase
+    const transitionZone = 0.2;
+    const currentPhase = colorPhases[phaseIndex];
+    const nextPhase = colorPhases[nextPhaseIndex];
+
+    if (phaseProgress > 1 - transitionZone) {
+      const t = (phaseProgress - (1 - transitionZone)) / transitionZone;
+      const smoothT = t * t * (3 - 2 * t); // smoothstep
+      return currentPhase.map((c, i) => lerpColor(c, nextPhase[i], smoothT));
+    }
+    return currentPhase;
+  }
+
+  function getRandomFromPalette(time) {
+    const pal = getCurrentPalette(time);
+    return pal[Math.floor(Math.random() * pal.length)];
+  }
+
+  // --- Sound Engine (Web Audio API) ---
+  let audioCtx = null;
+
+  function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  // Pentatonic scale frequencies
+  const pentatonic = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25];
+  let noteIndex = 0;
+
+  // ==============================================
+  // IMPROVEMENT 3: Harmonic Chords (two tones)
+  // ==============================================
+  function playChord() {
+    if (!audioCtx) return;
+    const baseIdx = noteIndex % pentatonic.length;
+    // Play root + a harmonious interval (3rd or 5th above)
+    const intervals = [2, 4]; // pentatonic 3rd and 5th
+    const interval = intervals[Math.floor(Math.random() * intervals.length)];
+    const freqs = [
+      pentatonic[baseIdx],
+      pentatonic[(baseIdx + interval) % pentatonic.length],
+    ];
+    noteIndex++;
+
+    freqs.forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = i === 0 ? 'sine' : 'triangle';
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+      const vol = i === 0 ? 0.12 : 0.06; // harmony is softer
+      gain.gain.setValueAtTime(0, audioCtx.currentTime);
+      gain.gain.linearRampToValueAtTime(vol, audioCtx.currentTime + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 1.5);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 1.6);
+    });
+  }
+
+  // ==============================================
+  // IMPROVEMENT 1: Organic Sine-Wave Floating Shapes
+  // ==============================================
+  const shapes = [];
+  const SHAPE_COUNT = 10;
+
+  function createShape(x, y) {
+    const types = ['circle', 'star', 'roundedRect', 'ring'];
+    return {
+      // Base position (center of the sine-wave orbit)
+      baseX: x !== undefined ? x : Math.random() * W(),
+      baseY: y !== undefined ? y : Math.random() * H(),
+      // Drift velocity for the base point
+      driftVx: (Math.random() - 0.5) * 0.15,
+      driftVy: (Math.random() - 0.5) * 0.15,
+      // Sine wave parameters for organic swooping
+      amplitudeX: 30 + Math.random() * 80,
+      amplitudeY: 20 + Math.random() * 60,
+      frequencyX: 0.0003 + Math.random() * 0.0006,
+      frequencyY: 0.0004 + Math.random() * 0.0005,
+      phaseX: Math.random() * Math.PI * 2,
+      phaseY: Math.random() * Math.PI * 2,
+      // Size pulsing (breathing)
+      baseSize: 30 + Math.random() * 60,
+      sizePulseAmp: 5 + Math.random() * 10,
+      sizePulseFreq: 0.0008 + Math.random() * 0.001,
+      sizePulsePhase: Math.random() * Math.PI * 2,
+      // Current computed position
+      x: 0, y: 0, size: 0,
+      rotation: Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 0.005,
+      type: types[Math.floor(Math.random() * types.length)],
+      colorIndex: Math.floor(Math.random() * 5),
+      alpha: 0.6 + Math.random() * 0.4,
+      phase: Math.random() * Math.PI * 2,
+      // Tap reaction: push velocity
+      pushVx: 0,
+      pushVy: 0,
+    };
+  }
+
+  for (let i = 0; i < SHAPE_COUNT; i++) {
+    shapes.push(createShape());
+  }
+
+  function drawStar(cx, cy, r, points, rotation) {
+    ctx.beginPath();
+    for (let i = 0; i < points * 2; i++) {
+      const angle = (i * Math.PI / points) + rotation;
+      const rad = i % 2 === 0 ? r : r * 0.45;
+      const sx = cx + Math.cos(angle) * rad;
+      const sy = cy + Math.sin(angle) * rad;
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.closePath();
+  }
+
+  function drawShape(s, time) {
+    ctx.save();
+    ctx.globalAlpha = s.alpha * (0.7 + 0.3 * Math.sin(time * 0.001 + s.phase));
+    ctx.fillStyle = s.color || '#fff';
+    ctx.strokeStyle = s.color || '#fff';
+    ctx.lineWidth = 3;
+
+    const drawSize = s.size || s.baseSize;
+
+    switch (s.type) {
+      case 'circle':
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, drawSize, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      case 'star':
+        drawStar(s.x, s.y, drawSize, 5, s.rotation);
+        ctx.fill();
+        break;
+      case 'roundedRect': {
+        const half = drawSize * 0.8;
+        const r = drawSize * 0.25;
+        ctx.translate(s.x, s.y);
+        ctx.rotate(s.rotation);
+        ctx.beginPath();
+        ctx.moveTo(-half + r, -half);
+        ctx.lineTo(half - r, -half);
+        ctx.quadraticCurveTo(half, -half, half, -half + r);
+        ctx.lineTo(half, half - r);
+        ctx.quadraticCurveTo(half, half, half - r, half);
+        ctx.lineTo(-half + r, half);
+        ctx.quadraticCurveTo(-half, half, -half, half - r);
+        ctx.lineTo(-half, -half + r);
+        ctx.quadraticCurveTo(-half, -half, -half + r, -half);
+        ctx.closePath();
+        ctx.fill();
+        break;
+      }
+      case 'ring':
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, drawSize, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, drawSize * 0.6, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+    }
+    ctx.restore();
+  }
+
+  function updateShape(s, time) {
+    // Drift the base point slowly
+    s.baseX += s.driftVx + s.pushVx;
+    s.baseY += s.driftVy + s.pushVy;
+    // Dampen push velocity
+    s.pushVx *= 0.96;
+    s.pushVy *= 0.96;
+
+    // Organic sine-wave motion around the drifting base
+    s.x = s.baseX + Math.sin(time * s.frequencyX + s.phaseX) * s.amplitudeX;
+    s.y = s.baseY + Math.cos(time * s.frequencyY + s.phaseY) * s.amplitudeY;
+
+    // Size breathing
+    s.size = s.baseSize + Math.sin(time * s.sizePulseFreq + s.sizePulsePhase) * s.sizePulseAmp;
+
+    s.rotation += s.rotSpeed;
+
+    // Update color from evolving palette
+    const pal = getCurrentPalette(time);
+    s.color = pal[s.colorIndex % pal.length];
+
+    // Wrap around edges with padding
+    const pad = s.baseSize + 100;
+    if (s.baseX < -pad) s.baseX = W() + pad;
+    if (s.baseX > W() + pad) s.baseX = -pad;
+    if (s.baseY < -pad) s.baseY = H() + pad;
+    if (s.baseY > H() + pad) s.baseY = -pad;
+  }
+
+  // --- Tap Particles ---
+  const particles = [];
+
+  function spawnParticles(x, y, count, time) {
+    const color = getRandomFromPalette(time);
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.3;
+      const speed = 1.5 + Math.random() * 3;
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: 4 + Math.random() * 12,
+        life: 1.0,
+        decay: 0.008 + Math.random() * 0.012,
+        color,
+        type: Math.random() > 0.5 ? 'circle' : 'star',
+        rotation: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.1,
+      });
+    }
+  }
+
+  // --- Tap Ripples ---
+  const ripples = [];
+
+  function spawnRipple(x, y, time) {
+    // Spawn multiple concentric ripples
+    for (let r = 0; r < 3; r++) {
+      ripples.push({
+        x, y,
+        radius: 5 + r * 8,
+        maxRadius: 100 + Math.random() * 80 + r * 30,
+        alpha: 0.5 - r * 0.12,
+        color: getRandomFromPalette(time),
+      });
+    }
+  }
+
+  // --- Tap Bloom Shapes ---
+  const bloomShapes = [];
+
+  function spawnBloomShapes(x, y, time) {
+    const count = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      const angle = (Math.PI * 2 * i) / count;
+      const speed = 0.5 + Math.random() * 1.5;
+      bloomShapes.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: 15 + Math.random() * 30,
+        life: 1.0,
+        decay: 0.006 + Math.random() * 0.006,
+        color: getRandomFromPalette(time),
+        type: ['circle', 'star', 'roundedRect'][Math.floor(Math.random() * 3)],
+        rotation: Math.random() * Math.PI * 2,
+        rotSpeed: (Math.random() - 0.5) * 0.03,
+        alpha: 0.8,
+      });
+    }
+  }
+
+  // ==============================================
+  // IMPROVEMENT 3: Tap Glow Effect
+  // ==============================================
+  const glows = [];
+
+  function spawnGlow(x, y, time) {
+    glows.push({
+      x, y,
+      radius: 20,
+      maxRadius: 120,
+      alpha: 0.4,
+      color: getRandomFromPalette(time),
+    });
+  }
+
+  // ==============================================
+  // IMPROVEMENT 3: Drag/Swipe Trail Particles
+  // ==============================================
+  const trailParticles = [];
+  let lastDragPos = null;
+
+  function spawnTrailParticle(x, y, time) {
+    trailParticles.push({
+      x, y,
+      size: 3 + Math.random() * 8,
+      life: 1.0,
+      decay: 0.015 + Math.random() * 0.01,
+      color: getRandomFromPalette(time),
+      vx: (Math.random() - 0.5) * 0.5,
+      vy: (Math.random() - 0.5) * 0.5,
+    });
+  }
+
+  // ==============================================
+  // IMPROVEMENT 3: Push nearby shapes on tap
+  // ==============================================
+  function pushNearbyShapes(x, y) {
+    const pushRadius = 200;
+    for (const s of shapes) {
+      const dx = s.x - x;
+      const dy = s.y - y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < pushRadius && dist > 0) {
+        const force = (1 - dist / pushRadius) * 3;
+        s.pushVx += (dx / dist) * force;
+        s.pushVy += (dy / dist) * force;
+        // Also make them briefly grow
+        s.sizePulseAmp = Math.min(s.sizePulseAmp + 3, 25);
+      }
+    }
+  }
+
+  // --- Heartbeat Pulse ---
+  let heartbeatPhase = 0;
+
+  // --- Touch/Click Handler ---
+  function handleInteraction(x, y, time) {
+    initAudio();
+    playChord();
+    spawnParticles(x, y, 14, time);
+    spawnRipple(x, y, time);
+    spawnBloomShapes(x, y, time);
+    spawnGlow(x, y, time);
+    pushNearbyShapes(x, y);
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    handleInteraction(e.clientX, e.clientY, performance.now());
+    lastDragPos = { x: e.clientX, y: e.clientY };
+  });
+
+  // Drag/swipe trail
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.buttons > 0 || e.pointerType === 'touch') {
+      const now = performance.now();
+      if (lastDragPos) {
+        const dx = e.clientX - lastDragPos.x;
+        const dy = e.clientY - lastDragPos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 5) {
+          spawnTrailParticle(e.clientX, e.clientY, now);
+          lastDragPos = { x: e.clientX, y: e.clientY };
+        }
+      } else {
+        lastDragPos = { x: e.clientX, y: e.clientY };
+      }
+    }
+  });
+
+  canvas.addEventListener('pointerup', () => { lastDragPos = null; });
+
+  // Support multi-touch
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const now = performance.now();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      handleInteraction(t.clientX, t.clientY, now);
+    }
+  }, { passive: false });
+
+  // Touch drag trail
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const now = performance.now();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      spawnTrailParticle(t.clientX, t.clientY, now);
+    }
+  }, { passive: false });
+
+  // --- Main Loop ---
+  function frame(time) {
+    ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    const w = W(), h = H();
+
+    // Heartbeat background pulse
+    heartbeatPhase += 0.015;
+    const pulse = Math.sin(heartbeatPhase) * 0.5 + 0.5;
+    const bgBright = 8 + pulse * 6;
+    ctx.fillStyle = `rgb(${bgBright}, ${bgBright}, ${bgBright + 4})`;
+    ctx.fillRect(0, 0, w, h);
+
+    // Draw floating shapes (organic movement)
+    for (const s of shapes) {
+      updateShape(s, time);
+      drawShape(s, time);
+    }
+
+    // Draw & update glows
+    for (let i = glows.length - 1; i >= 0; i--) {
+      const g = glows[i];
+      g.radius += 1.5;
+      g.alpha -= 0.005;
+      if (g.alpha <= 0 || g.radius >= g.maxRadius) {
+        glows.splice(i, 1);
+        continue;
+      }
+      ctx.save();
+      const gradient = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, g.radius);
+      gradient.addColorStop(0, g.color);
+      gradient.addColorStop(1, 'transparent');
+      ctx.globalAlpha = g.alpha;
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(g.x, g.y, g.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Draw & update ripples
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.radius += 1.8;
+      r.alpha -= 0.008;
+      if (r.alpha <= 0 || r.radius >= r.maxRadius) {
+        ripples.splice(i, 1);
+        continue;
+      }
+      ctx.save();
+      ctx.globalAlpha = r.alpha;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Draw & update bloom shapes
+    for (let i = bloomShapes.length - 1; i >= 0; i--) {
+      const b = bloomShapes[i];
+      b.x += b.vx;
+      b.y += b.vy;
+      b.vx *= 0.99;
+      b.vy *= 0.99;
+      b.rotation += b.rotSpeed;
+      b.life -= b.decay;
+      if (b.life <= 0) {
+        bloomShapes.splice(i, 1);
+        continue;
+      }
+      const s = { ...b, alpha: b.life * b.alpha, size: b.size };
+      drawShape(s, time);
+    }
+
+    // Draw & update particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+      p.vy += 0.02;
+      p.life -= p.decay;
+      p.rotation += p.rotSpeed;
+
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+
+      ctx.save();
+      ctx.globalAlpha = p.life;
+      ctx.fillStyle = p.color;
+      if (p.type === 'circle') {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        drawStar(p.x, p.y, p.size * p.life, 5, p.rotation);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // Draw & update trail particles
+    for (let i = trailParticles.length - 1; i >= 0; i--) {
+      const tp = trailParticles[i];
+      tp.x += tp.vx;
+      tp.y += tp.vy;
+      tp.life -= tp.decay;
+
+      if (tp.life <= 0) {
+        trailParticles.splice(i, 1);
+        continue;
+      }
+
+      ctx.save();
+      ctx.globalAlpha = tp.life * 0.7;
+      const gradient = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, tp.size * tp.life);
+      gradient.addColorStop(0, tp.color);
+      gradient.addColorStop(1, 'transparent');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(tp.x, tp.y, tp.size * tp.life, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+
+  // --- Fullscreen on first interaction (mobile) ---
+  let hasRequestedFullscreen = false;
+  document.addEventListener('click', () => {
+    if (hasRequestedFullscreen) return;
+    hasRequestedFullscreen = true;
+    const el = document.documentElement;
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  }, { once: false });
+
+})();
+</script>
+</body>
+</html>
