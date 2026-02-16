@@ -51,10 +51,10 @@
   <circle cx="100" cy="100" r="90" fill="#fff" stroke="#e0e0e0" stroke-width="2"/>
   <!-- Left eye -->
   <ellipse id="eyeL" cx="70" cy="82" rx="16" ry="18" fill="#1a1a2e"/>
-  <ellipse id="pupilL" cx="74" cy="78" rx="6" ry="7" fill="#fff"/>
+  <ellipse id="pupilL" cx="74" cy="78" rx="9" ry="10" fill="#fff"/>
   <!-- Right eye -->
   <ellipse id="eyeR" cx="130" cy="82" rx="16" ry="18" fill="#1a1a2e"/>
-  <ellipse id="pupilR" cx="134" cy="78" rx="6" ry="7" fill="#fff"/>
+  <ellipse id="pupilR" cx="134" cy="78" rx="9" ry="10" fill="#fff"/>
   <!-- Rosy cheeks -->
   <ellipse id="cheekL" cx="50" cy="110" rx="18" ry="12" fill="#ffb3b3" opacity="0.5"/>
   <ellipse id="cheekR" cx="150" cy="110" rx="18" ry="12" fill="#ffb3b3" opacity="0.5"/>
@@ -183,61 +183,18 @@
   }
 
   // ==============================================
-  // Sound Engine + V4: Ambient Soundscape
+  // Sound Engine
   // ==============================================
   let audioCtx = null;
-  let ambientStarted = false;
-  let ambientGain = null;
-  let ambientOsc1 = null;
-  let ambientOsc2 = null;
 
   function initAudio() {
-    if (audioCtx) return;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-
-  function startAmbientSoundscape() {
-    if (ambientStarted || !audioCtx) return;
-    ambientStarted = true;
-
-    // Master gain for ambient layer
-    ambientGain = audioCtx.createGain();
-    ambientGain.gain.setValueAtTime(0, audioCtx.currentTime);
-    // Fade in over 3 seconds
-    ambientGain.gain.linearRampToValueAtTime(0.04, audioCtx.currentTime + 3);
-    ambientGain.connect(audioCtx.destination);
-
-    // Warm drone — low C2 (65Hz)
-    ambientOsc1 = audioCtx.createOscillator();
-    ambientOsc1.type = 'sine';
-    ambientOsc1.frequency.setValueAtTime(65.41, audioCtx.currentTime);
-    const gain1 = audioCtx.createGain();
-    gain1.gain.setValueAtTime(1.0, audioCtx.currentTime);
-    ambientOsc1.connect(gain1);
-    gain1.connect(ambientGain);
-    ambientOsc1.start();
-
-    // Gentle fifth above — G2 (98Hz)
-    ambientOsc2 = audioCtx.createOscillator();
-    ambientOsc2.type = 'sine';
-    ambientOsc2.frequency.setValueAtTime(98.00, audioCtx.currentTime);
-    const gain2 = audioCtx.createGain();
-    gain2.gain.setValueAtTime(0.5, audioCtx.currentTime);
-    ambientOsc2.connect(gain2);
-    gain2.connect(ambientGain);
-    ambientOsc2.start();
-
-    // Slowly modulate the drone pitch over time for organic feel
-    function modulateAmbient() {
-      if (!audioCtx || !ambientOsc1) return;
-      const now = audioCtx.currentTime;
-      // Gentle pitch drift on the drone
-      const drift = Math.sin(now * 0.05) * 2;
-      ambientOsc1.frequency.setTargetAtTime(65.41 + drift, now, 0.5);
-      ambientOsc2.frequency.setTargetAtTime(98.00 + drift * 0.7, now, 0.5);
-      setTimeout(modulateAmbient, 500);
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    modulateAmbient();
+    // iOS Safari requires resume() during a user gesture
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
   }
 
   const pentatonic = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25];
@@ -826,7 +783,6 @@
   // --- Touch/Click Handler ---
   function handleInteraction(x, y, time) {
     initAudio();
-    startAmbientSoundscape();
 
     // Check bubble tap first
     const hitBubble = checkBubbleTap(x, y, time);
@@ -845,14 +801,45 @@
     setFaceLooking(x, y);
   }
 
+  // Use touch events as primary on touch devices (avoids iOS double-fire)
+  let usingTouch = false;
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    usingTouch = true;
+    const now = performance.now();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      handleInteraction(t.clientX, t.clientY, now);
+    }
+    if (e.changedTouches.length > 0) {
+      const t = e.changedTouches[0];
+      lastDragPos = { x: t.clientX, y: t.clientY };
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const now = performance.now();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches[i];
+      spawnTrailParticle(t.clientX, t.clientY, now);
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', () => { lastDragPos = null; });
+
+  // Pointer events for mouse/desktop only (skip if touch device)
   canvas.addEventListener('pointerdown', (e) => {
+    if (usingTouch) return;
     e.preventDefault();
     handleInteraction(e.clientX, e.clientY, performance.now());
     lastDragPos = { x: e.clientX, y: e.clientY };
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (e.buttons > 0 || e.pointerType === 'touch') {
+    if (usingTouch) return;
+    if (e.buttons > 0) {
       const now = performance.now();
       if (lastDragPos) {
         const dx = e.clientX - lastDragPos.x;
@@ -868,25 +855,7 @@
     }
   });
 
-  canvas.addEventListener('pointerup', () => { lastDragPos = null; });
-
-  canvas.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    const now = performance.now();
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const t = e.changedTouches[i];
-      handleInteraction(t.clientX, t.clientY, now);
-    }
-  }, { passive: false });
-
-  canvas.addEventListener('touchmove', (e) => {
-    e.preventDefault();
-    const now = performance.now();
-    for (let i = 0; i < e.changedTouches.length; i++) {
-      const t = e.changedTouches[i];
-      spawnTrailParticle(t.clientX, t.clientY, now);
-    }
-  }, { passive: false });
+  canvas.addEventListener('pointerup', () => { if (!usingTouch) lastDragPos = null; });
 
   // --- Main Loop ---
   let lastTime = 0;
